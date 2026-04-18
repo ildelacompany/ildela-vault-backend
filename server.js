@@ -9,7 +9,7 @@ app.use(cors({
 }));
 app.use(express.json());
 
-const progress = {};
+const sessions = {};
 
 function shuffle(arr) {
   const a = [...arr];
@@ -20,90 +20,45 @@ function shuffle(arr) {
   return a;
 }
 
-function getSafeState(email) {
-  const s = progress[email];
-  return {
-    index: s.index,
-    total: s.assigned.length,
-    strikes: s.strikes,
-    locked: s.locked,
-    lockedUntil: s.lockedUntil,
-    guessed: s.guessed,
-    assigned: s.assigned
-  };
-}
-
+// Start or resume session
 app.post('/start', (req, res) => {
   const { email, questions } = req.body;
   if (!email) return res.status(400).json({ error: 'Email required' });
   if (!questions || !questions.length) return res.status(400).json({ error: 'Questions required' });
 
-  // Return existing progress if session exists
-  if (progress[email]) return res.json(getSafeState(email));
+  if (sessions[email]) {
+    const s = sessions[email];
+    return res.json({ index: s.index, total: s.assigned.length, assigned: s.assigned, lockoutCount: s.lockoutCount });
+  }
 
-  // First time — assign questions
   const first = questions.find(q => q.is_first) || questions[0];
   const rest = shuffle(questions.filter(q => !q.is_first));
   const count = Math.floor(Math.random() * 3) + 5;
   const assigned = [first, ...rest.slice(0, count - 1)].map(q => q.id);
 
-  progress[email] = {
-    email,
-    assigned,
-    index: 0,
-    strikes: 0,
-    locked: false,
-    lockedUntil: null,
-    guessed: [],
-    lockoutCount: 0
-  };
-
-  return res.json(getSafeState(email));
+  sessions[email] = { email, assigned, index: 0, lockoutCount: 0 };
+  return res.json({ index: 0, total: assigned.length, assigned, lockoutCount: 0 });
 });
 
-app.post('/guess', (req, res) => {
-  const { email, letter, answer_display } = req.body;
-  const state = progress[email];
-  if (!state) return res.status(404).json({ error: 'No session' });
-  if (state.locked) return res.status(403).json({ error: 'Locked' });
+// Called only when a question is solved or failed
+app.post('/advance', (req, res) => {
+  const { email, outcome } = req.body; // outcome: 'solved' | 'failed'
+  const s = sessions[email];
+  if (!s) return res.status(404).json({ error: 'No session' });
 
-  const answer = answer_display.toUpperCase();
-  const L = letter.toUpperCase();
-  const isCorrect = answer.includes(L);
-  state.guessed.push(L);
-  if (!isCorrect) state.strikes++;
-
-  const won = answer.split('').every(ch => ch === ' ' || state.guessed.includes(ch));
-
-  if (state.strikes >= 5) {
-    const failed = state.assigned[state.index];
-    state.assigned.splice(state.index, 1);
-    state.assigned.push(failed);
-    state.guessed = [];
-    state.strikes = 0;
-    state.locked = true;
-    state.lockedUntil = Date.now() + 30000;
-    state.lockoutCount = (state.lockoutCount || 0) + 1;
-  } else if (won) {
-    state.index++;
-    state.guessed = [];
-    state.strikes = 0;
+  if (outcome === 'failed') {
+    // Move failed question to end of queue
+    const failedId = s.assigned[s.index];
+    s.assigned.splice(s.index, 1);
+    s.assigned.push(failedId);
+    s.lockoutCount++;
+  } else {
+    // Solved — advance index
+    s.index++;
   }
 
-  res.json({
-    correct: isCorrect,
-    win: won,
-    complete: state.index >= state.assigned.length,
-    locked: state.locked,
-    lockedUntil: state.lockedUntil,
-    strikes: state.strikes,
-    guessed: state.guessed,
-    index: state.index
-  });
-});
-
-app.post('/refresh-questions', (req, res) => {
-  res.json({ ok: true });
+  const complete = s.index >= s.assigned.length;
+  return res.json({ index: s.index, total: s.assigned.length, assigned: s.assigned, lockoutCount: s.lockoutCount, complete });
 });
 
 app.get('/health', (req, res) => res.json({ ok: true }));
