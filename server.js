@@ -9,7 +9,7 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// ── Shopify token (refreshed every 23 hours) ──────────────────────────────────
+// ── Shopify token ─────────────────────────────────────────────────────────────
 let shopifyToken = null;
 let tokenExpiry = 0;
 
@@ -24,10 +24,12 @@ async function getToken() {
       client_secret: process.env.SHOPIFY_CLIENT_SECRET
     })
   });
-  const data = await res.json();
-  if (!data.access_token) throw new Error('Token fetch failed: ' + JSON.stringify(data));
+  const text = await res.text();
+  console.log('TOKEN RESPONSE:', res.status, text);
+  const data = JSON.parse(text);
+  if (!data.access_token) throw new Error('Token fetch failed: ' + text);
   shopifyToken = data.access_token;
-  tokenExpiry = Date.now() + 23 * 60 * 60 * 1000; // refresh before 24h expiry
+  tokenExpiry = Date.now() + 23 * 60 * 60 * 1000;
   return shopifyToken;
 }
 
